@@ -1,0 +1,31 @@
+services:
+  figura-backend:
+    build: .
+    image: figura-backend:1.0.0
+    container_name: figura-backend
+    restart: unless-stopped
+
+    # Порт наружу не открываем: перед сервисом обязан стоять reverse proxy с TLS,
+    # потому что клиент Figura ходит только по https и wss. Если nginx живёт на
+    # хосте — оставь как есть и проксируй на 127.0.0.1:8080.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    env_file:
+      - .env
+
+    volumes:
+      - figura-data:/data
+
+    # Аватары целиком лежат в памяти только на время запроса, но кэш ресурсов и
+    # хэши растут. 256 МБ хватает с запасом на пару сотен игроков.
+    mem_limit: 512m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  figura-data:
