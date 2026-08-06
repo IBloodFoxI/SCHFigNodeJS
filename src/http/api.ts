@@ -78,9 +78,17 @@ export function createApiHandler(deps: ApiDeps) {
 
     // -- everything below needs a token --
 
+    if (path.startsWith("admin/")) {
+      return admin(req, res, path.slice("admin/".length), deps);
+    }
+
     const header = req.headers["token"];
     const me = tokens.verify(Array.isArray(header) ? header[0] : header);
     if (me === null) return text(res, 401, "unauthorized");
+
+    // Any authenticated request means this player is still around, so their avatars are
+    // not garbage. Throttled inside the store; deliberately not awaited.
+    void avatars.touch(me.uuid);
 
     if (path === "") return text(res, 200, "ok"); // checkAuth
     if (path === "limits") return limits(res, me, config);
@@ -116,6 +124,73 @@ export function createApiHandler(deps: ApiDeps) {
 
     return text(res, 404, "not found");
   };
+}
+
+// -- admin --
+
+/**
+ * Maintenance routes, guarded by their own token so they are nothing like a player token.
+ * Disabled entirely when FIGURA_ADMIN_TOKEN is empty.
+ */
+async function admin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  action: string,
+  deps: ApiDeps,
+): Promise<void> {
+  const { config, avatars, users, log } = deps;
+
+  if (config.adminToken === "") return text(res, 404, "not found");
+
+  const header = req.headers["admin-token"];
+  const provided = Array.isArray(header) ? header[0] : header;
+  if (provided !== config.adminToken) return text(res, 401, "unauthorized");
+
+  if (action === "stats" && req.method === "GET") {
+    const stats = await avatars.stats();
+    return json(res, stats);
+  }
+
+  if (action === "sweep" && req.method === "POST") {
+    const result = await runSweep(deps);
+    return json(res, result);
+  }
+
+  if (action.startsWith("purge/") && req.method === "POST") {
+    const uuid = action.slice("purge/".length).toLowerCase();
+    if (!UUID_RE.test(uuid)) return text(res, 400, "not a uuid");
+
+    const removed = await avatars.purge(uuid);
+    await users.forget(uuid);
+    // Somebody else may have been wearing that avatar.
+    for (const id of ["avatar"]) await users.unequipAll(uuid, id);
+    deps.hub.broadcastAvatarChanged(uuid);
+
+    log(`[admin] purged ${uuid}: ${removed} avatar(s)`);
+    return json(res, { uuid, removed });
+  }
+
+  return text(res, 404, "not found");
+}
+
+/** Shared by the scheduled cleanup and the admin endpoint. */
+export async function runSweep(deps: ApiDeps): Promise<{
+  owners: number; files: number; bytes: number;
+}> {
+  const { config, avatars, users, hub, log } = deps;
+  const maxAge = config.cleanupInactiveDays * 24 * 60 * 60 * 1000;
+
+  const result = await avatars.sweep(maxAge);
+  for (const owner of result.owners) {
+    await users.forget(owner);
+    hub.broadcastAvatarChanged(owner);
+  }
+
+  if (result.files > 0) {
+    log(`[cleanup] removed ${result.files} file(s), ${result.bytes} bytes, `
+      + `${result.owners.length} player(s) inactive for over ${config.cleanupInactiveDays} days`);
+  }
+  return { owners: result.owners.length, files: result.files, bytes: result.bytes };
 }
 
 // -- endpoints --

@@ -3,7 +3,7 @@ import path from "node:path";
 import { WebSocketServer } from "ws";
 
 import { loadConfig } from "./config.js";
-import { createApiHandler } from "./http/api.js";
+import { createApiHandler, runSweep } from "./http/api.js";
 import { AssetCache } from "./stores/assets.js";
 import { AvatarStore } from "./stores/avatars.js";
 import { UserStore } from "./stores/users.js";
@@ -28,7 +28,12 @@ async function main(): Promise<void> {
   await Promise.all([avatars.init(), users.init(), assets.init()]);
 
   const hub = new WsHub(tokens, config.debug, log);
-  const handle = createApiHandler({ config, tokens, avatars, users, assets, hub, log });
+  const deps = { config, tokens, avatars, users, assets, hub, log };
+  const handle = createApiHandler(deps);
+
+  // A process killed mid-rename leaves *.tmp behind; clear them before serving.
+  const strays = await avatars.cleanTemp();
+  if (strays > 0) log(`removed ${strays} leftover temp file(s)`);
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
@@ -56,6 +61,19 @@ async function main(): Promise<void> {
       : null;
   keepAlive?.unref();
 
+  let cleanup: NodeJS.Timeout | null = null;
+  if (config.cleanupEnabled) {
+    const run = (): void => {
+      runSweep(deps).catch((error: unknown) => log(`[cleanup] failed: ${String(error)}`));
+    };
+    cleanup = setInterval(run, config.cleanupIntervalHours * 60 * 60 * 1000);
+    cleanup.unref();
+    // Once shortly after boot too, so a long-stopped instance catches up.
+    setTimeout(run, 60_000).unref();
+    log(`cleanup on: avatars untouched for ${config.cleanupInactiveDays} days are removed `
+      + `every ${config.cleanupIntervalHours}h`);
+  }
+
   server.listen(config.port, config.host, () => {
     log(`Figura backend listening on http://${config.host}:${config.port}`);
     log("TLS is terminated upstream — the Figura client only speaks https/wss, so a "
@@ -65,6 +83,7 @@ async function main(): Promise<void> {
   const shutdown = (signal: string): void => {
     log(`${signal} received, shutting down`);
     if (keepAlive) clearInterval(keepAlive);
+    if (cleanup) clearInterval(cleanup);
     hub.closeAll();
     server.close(() => process.exit(0));
     // Do not let a wedged connection hold the container hostage.

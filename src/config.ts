@@ -62,6 +62,20 @@ export interface Config {
   hasJoinedUrl: string;
   sessionTokenTtlMinutes: number;
 
+  /**
+   * Avatars of players who stopped coming are the only thing here that grows without
+   * bound — one file per player who ever joined. The sweep drops the ones nobody has
+   * touched in a while; "touched" means the owner made an authenticated request, not
+   * that somebody downloaded the file, because clients cache avatars by hash and an
+   * active player's avatar may go for weeks without being fetched again.
+   */
+  cleanupEnabled: boolean;
+  cleanupInactiveDays: number;
+  cleanupIntervalHours: number;
+
+  /** Enables /api/admin/*. Empty disables those routes entirely. */
+  adminToken: string;
+
   wsKeepaliveSeconds: number;
   debug: boolean;
 }
@@ -85,6 +99,12 @@ export function loadConfig(): Config {
     assetsProxy: bool("FIGURA_ASSETS_PROXY", true),
     assetsUpstream: str("FIGURA_ASSETS_UPSTREAM", "https://figura.moonlight-devs.org/api")
       .replace(/\/$/, ""),
+
+    cleanupEnabled: bool("FIGURA_CLEANUP_ENABLED", true),
+    cleanupInactiveDays: int("FIGURA_CLEANUP_INACTIVE_DAYS", 90),
+    cleanupIntervalHours: int("FIGURA_CLEANUP_INTERVAL_HOURS", 24),
+
+    adminToken: str("FIGURA_ADMIN_TOKEN", ""),
 
     sessionAuthEnabled: bool("FIGURA_SESSION_AUTH", true),
     hasJoinedUrl: str(

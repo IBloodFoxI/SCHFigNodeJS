@@ -31,24 +31,50 @@ offline-UUID.
 
 ## Запуск
 
+Собирать на сервере ничего не надо — образ публикует GitHub Action в GHCR.
+
 ```bash
 cp .env.example .env
 ```
 
-Заполнить `FIGURA_SECRET` — то же значение, что в `config.yml` плагина
-FiguraLink. Затем:
+Заполнить `FIGURA_SECRET` (то же значение, что в `config.yml` плагина
+FiguraLink) и проверить `FIGURA_DOMAIN`. Затем:
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
-Сервис слушает `127.0.0.1:8080`. Наружу его выставляет reverse proxy, потому что
-клиент Figura ходит **только** по `https://` и `wss://` — схема зашита в код мода,
-самоподписанный сертификат тоже не подойдёт.
+Обновление:
 
-Пример nginx лежит в репозитории плагина (`nginx.conf.example`). Ключевое:
-`/api/` и `/ws` идут на один и тот же порт, а на `/ws` нужны заголовки
-`Upgrade`/`Connection` и большой `proxy_read_timeout`.
+```bash
+docker compose pull && docker compose up -d
+```
+
+### Traefik
+
+Контейнер порты наружу не публикует — он живёт в сети `proxy` и выставляется
+метками. Сертификат выпускается на основном уровне Traefik, поэтому здесь только
+роутер:
+
+```yaml
+labels:
+  - "traefik.enable=true"
+  - "traefik.docker.network=proxy"
+  - "traefik.http.routers.figura.rule=Host(`${FIGURA_DOMAIN}`)"
+  - "traefik.http.routers.figura.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+  - "traefik.http.routers.figura.tls=true"
+  - "traefik.http.services.figura.loadbalancer.server.port=8080"
+```
+
+Вебсокет Traefik проксирует сам, включать ничего не нужно. Единственное, за чем
+стоит следить, — таймаут простоя на entrypoint: держите
+`FIGURA_WS_KEEPALIVE_SECONDS` заметно ниже него.
+
+Если сеть `proxy` создаётся стеком основного Traefik, а не этим compose,
+раскомментируйте `external: true` в секции `networks`.
+
+TLS обязателен: клиент Figura ходит **только** по `https://` и `wss://` — схемы
+зашиты в код мода, и самоподписанный сертификат тоже не подойдёт.
 
 ## Настройки
 
@@ -66,6 +92,56 @@ docker compose up -d --build
 **Лимит веса аватара задаётся в плагине, а не здесь.** Он подписывается внутрь
 токена, потому что только плагин знает про группы прав. Переменная выше — потолок
 на случай сломанного или устаревшего плагина; ставьте её заметно выше и забудьте.
+
+## Место на диске
+
+Перезаливка аватара место **не** занимает: клиент всегда шлёт его под статичным
+id `avatar`, файл перезаписывается поверх. На игрока приходится ровно один файл
+плюс профиль на 165 байт.
+
+Растёт только одно — аватары игроков, которые перестали заходить. Для них есть
+автоочистка:
+
+```env
+FIGURA_CLEANUP_ENABLED=true
+FIGURA_CLEANUP_INACTIVE_DAYS=90
+FIGURA_CLEANUP_INTERVAL_HOURS=24
+```
+
+Активность считается **по обращениям с токеном этого игрока**, а не по
+скачиваниям его аватара: клиенты кэшируют аватары по хэшу, и файл активного
+игрока может неделями никем не запрашиваться. Отметка идёт через mtime файла, не
+чаще раза в час на игрока.
+
+Заодно сносятся осиротевшие `*.tmp` — от процесса, убитого посреди записи. Это
+делается и при каждом старте сервиса.
+
+## Администрирование
+
+Включается непустым `FIGURA_ADMIN_TOKEN`. Пустой — маршруты отвечают 404, как
+будто их нет. Это отдельный токен, не игровой.
+
+```bash
+curl -H "admin-token: $TOKEN" https://figura.serverchichi.online/api/admin/stats
+```
+
+```bash
+curl -X POST -H "admin-token: $TOKEN" https://figura.serverchichi.online/api/admin/sweep
+```
+
+```bash
+curl -X POST -H "admin-token: $TOKEN" \
+  https://figura.serverchichi.online/api/admin/purge/<uuid>
+```
+
+| Маршрут | Что делает |
+| --- | --- |
+| `GET /api/admin/stats` | сколько игроков, файлов и байт |
+| `POST /api/admin/sweep` | прогнать очистку прямо сейчас, не дожидаясь расписания |
+| `POST /api/admin/purge/<uuid>` | удалить все аватары игрока и его профиль |
+
+Удаление идёт через сервис, а не по файлам мимо него, — иначе останутся
+устаревшие кэши хэшей и подписчики не узнают, что аватар пропал.
 
 ## Проверка
 

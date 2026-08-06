@@ -1,15 +1,15 @@
 services:
   figura-backend:
-    build: .
-    image: figura-backend:1.0.0
+    # Образ собирается GitHub Action и лежит в GHCR — на сервере ничего
+    # компилировать не надо. Тег меняется через FIGURA_IMAGE в .env.
+    image: ${FIGURA_IMAGE:-ghcr.io/ibloodfoxi/schfignodejs:latest}
     container_name: figura-backend
     restart: unless-stopped
 
-    # Порт наружу не открываем: перед сервисом обязан стоять reverse proxy с TLS,
-    # потому что клиент Figura ходит только по https и wss. Если nginx живёт на
-    # хосте — оставь как есть и проксируй на 127.0.0.1:8080.
-    ports:
-      - "127.0.0.1:8080:8080"
+    # Порты наружу не публикуем: снаружи стоит Traefik, он же и терминирует TLS.
+    # Внутри сети proxy контейнер доступен по имени на порту 8080.
+    expose:
+      - "8080"
 
     env_file:
       - .env
@@ -17,8 +17,30 @@ services:
     volumes:
       - figura-data:/data
 
-    # Аватары целиком лежат в памяти только на время запроса, но кэш ресурсов и
-    # хэши растут. 256 МБ хватает с запасом на пару сотен игроков.
+    networks:
+      - proxy
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+
+      # Домен берётся из .env, чтобы не править compose.
+      - "traefik.http.routers.figura.rule=Host(`${FIGURA_DOMAIN}`)"
+      - "traefik.http.routers.figura.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.figura.tls=true"
+
+      # Сертификат выпускается на основном уровне Traefik, поэтому certresolver
+      # здесь не указан. Если у вас он задаётся на роутере, раскомментируйте:
+      # - "traefik.http.routers.figura.tls.certresolver=letsencrypt"
+
+      - "traefik.http.services.figura.loadbalancer.server.port=8080"
+
+      # Вебсокет Traefik проксирует сам, ничего включать не нужно. А вот таймаут
+      # простоя живёт на entrypoint основного Traefik — если он меньше пары минут,
+      # держите FIGURA_WS_KEEPALIVE_SECONDS заметно ниже него.
+
+    # Аватары держатся в памяти только на время запроса; растут кэш хэшей и
+    # ресурсов. 512 МБ с большим запасом на пару сотен игроков.
     mem_limit: 512m
 
     logging:
@@ -26,6 +48,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+networks:
+  proxy:
+    name: proxy
+    # Если сеть создаётся стеком основного Traefik, а не этим compose,
+    # раскомментируйте — иначе docker compose попробует создать её сам
+    # и упрётся в несовпадение меток.
+    # external: true
 
 volumes:
   figura-data:

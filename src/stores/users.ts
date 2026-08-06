@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export interface Equipped {
@@ -75,6 +75,16 @@ export class UserStore {
         profile.equipped = filtered;
         await this.#save(uuid, profile);
       }
+    }
+  }
+
+  /** Forgets a player entirely: cached profile and the file behind it. */
+  async forget(uuid: string): Promise<void> {
+    this.#cache.delete(uuid);
+    try {
+      await rm(this.#file(uuid), { force: true });
+    } catch {
+      // Never existed, which is the same outcome.
     }
   }
 
