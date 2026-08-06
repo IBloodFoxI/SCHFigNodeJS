@@ -9,6 +9,9 @@ import { SessionAuth } from "./sessionAuth.js";
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+/** How long after an upload an equip still counts as "the player equipping their own". */
+const SELF_EQUIP_WINDOW_MS = 120_000;
+
 export interface ApiDeps {
   config: Config;
   tokens: TokenVerifier;
@@ -29,6 +32,8 @@ export interface ApiDeps {
 export function createApiHandler(deps: ApiDeps) {
   const { config, tokens, avatars, users, assets, hub, log } = deps;
   const sessionAuth = new SessionAuth();
+  /** uuid -> when they last uploaded; see the self-equip note in equip(). */
+  const recentUploads = new Map<string, number>();
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -95,7 +100,7 @@ export function createApiHandler(deps: ApiDeps) {
     if (path === "motd") return motd(res, config);
 
     if (path === "equip" && method === "POST") {
-      return equip(req, res, me, avatars, users, hub);
+      return equip(req, res, me, avatars, users, hub, log, recentUploads);
     }
 
     const parts = path.split("/");
@@ -111,7 +116,7 @@ export function createApiHandler(deps: ApiDeps) {
     }
 
     if (method === "PUT" && parts.length === 1) {
-      return upload(req, res, me, parts[0]!, avatars, hub, config);
+      return upload(req, res, me, parts[0]!, avatars, hub, config, recentUploads);
     }
 
     if (method === "DELETE" && parts.length === 1) {
@@ -253,6 +258,7 @@ async function upload(
   avatars: AvatarStore,
   hub: WsHub,
   config: Config,
+  recentUploads: Map<string, number>,
 ): Promise<void> {
   if (!AvatarStore.validId(id)) return text(res, 400, "bad avatar id");
 
@@ -271,6 +277,7 @@ async function upload(
   }
 
   await avatars.save(me.uuid, id, body);
+  recentUploads.set(me.uuid, Date.now());
   hub.broadcastAvatarChanged(me.uuid);
   text(res, 200, "ok");
 }
@@ -282,6 +289,8 @@ async function equip(
   avatars: AvatarStore,
   users: UserStore,
   hub: WsHub,
+  log: (message: string) => void,
+  recentUploads: Map<string, number>,
 ): Promise<void> {
   const body = await readBody(req, 64 * 1024);
   if (body === null) return text(res, 400, "body too big");
@@ -292,9 +301,37 @@ async function equip(
     for (const entry of parsed) {
       const owner = String(entry.owner).toLowerCase();
       const id = String(entry.id);
-      if (!UUID_RE.test(owner) || !AvatarStore.validId(id)) continue;
-      if (!(await avatars.exists(owner, id))) continue;
-      equipped.push({ owner, id });
+      if (!UUID_RE.test(owner) || !AvatarStore.validId(id)) {
+        log(`[equip] ${me.uuid} sent a malformed entry (owner=${entry.owner} id=${entry.id})`);
+        continue;
+      }
+
+      if (await avatars.exists(owner, id)) {
+        equipped.push({ owner, id });
+        continue;
+      }
+
+      // Right after uploading, the client equips what it just sent using the owner UUID it
+      // believes it has — which comes from whatever it thought the local player was when
+      // the avatar was loaded. That can disagree with the UUID the game server assigned,
+      // most visibly for offline players whose launcher UUID has nothing to do with the
+      // offline one derived from their nickname. The upload itself landed under the token's
+      // UUID, so the entry points at nothing and the player ends up wearing nothing.
+      //
+      // Scoped to the seconds right after that player's own upload on purpose: outside that
+      // window, asking for an avatar that does not exist is just a bad request, and quietly
+      // swapping in their own would be wrong.
+      const uploadedAt = recentUploads.get(me.uuid) ?? 0;
+      const justUploaded = Date.now() - uploadedAt < SELF_EQUIP_WINDOW_MS;
+
+      if (justUploaded && owner !== me.uuid && (await avatars.exists(me.uuid, id))) {
+        log(`[equip] ${me.uuid} asked for ${owner}/${id} which does not exist; `
+          + `using their own ${id} instead (client and server disagree on the local UUID)`);
+        equipped.push({ owner: me.uuid, id });
+        continue;
+      }
+
+      log(`[equip] ${me.uuid} asked for ${owner}/${id}, which does not exist — dropped`);
     }
   } catch {
     return text(res, 400, "bad json");
