@@ -80,6 +80,13 @@ export function createApiHandler(deps: ApiDeps) {
       if (!id) return text(res, 400, "no id");
       const token = await sessionAuth.verify(id, config, tokens);
       if (token === null) return text(res, 401, "verification failed");
+
+      // Worth shouting about: only an unmodified client takes this path, and an unmodified
+      // client still has Figura's v4-UUID filter — it will never load an offline player's
+      // avatar no matter what the backend does.
+      const who = tokens.verify(token);
+      log(`[auth] ${who?.name ?? "?"} authenticated through Mojang — this client is NOT the `
+        + `fork, so it will not see offline players' avatars`);
       return text(res, 200, token);
     }
 
