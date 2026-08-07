@@ -5,6 +5,7 @@ import { AvatarStore } from "../stores/avatars.js";
 import type { Equipped, UserStore } from "../stores/users.js";
 import type { Session, TokenVerifier } from "../tokens.js";
 import type { WsHub } from "../ws/hub.js";
+import type { LogBuffer } from "../logbuffer.js";
 import { SessionAuth } from "./sessionAuth.js";
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -20,6 +21,7 @@ export interface ApiDeps {
   assets: AssetCache;
   hub: WsHub;
   log: (message: string) => void;
+  logs: LogBuffer;
 }
 
 /**
@@ -150,6 +152,16 @@ async function admin(
   const header = req.headers["admin-token"];
   const provided = Array.isArray(header) ? header[0] : header;
   if (provided !== config.adminToken) return text(res, 401, "unauthorized");
+
+  if (action === "logs" && req.method === "GET") {
+    // Mirrored into the Minecraft server console by the FiguraLink plugin.
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const since = Number.parseInt(url.searchParams.get("since") ?? "0", 10);
+    const limit = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
+    const page = deps.logs.after(Number.isFinite(since) ? since : 0,
+                                 Number.isFinite(limit) ? limit : 100);
+    return json(res, page);
+  }
 
   if (action === "stats" && req.method === "GET") {
     const stats = await avatars.stats();

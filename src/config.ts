@@ -76,6 +76,9 @@ export interface Config {
   /** Enables /api/admin/*. Empty disables those routes entirely. */
   adminToken: string;
 
+  /** How many recent log lines to keep for /api/admin/logs. */
+  logBufferLines: number;
+
   wsKeepaliveSeconds: number;
   debug: boolean;
 }
@@ -105,6 +108,7 @@ export function loadConfig(): Config {
     cleanupIntervalHours: int("FIGURA_CLEANUP_INTERVAL_HOURS", 24),
 
     adminToken: str("FIGURA_ADMIN_TOKEN", ""),
+    logBufferLines: int("FIGURA_LOG_BUFFER_LINES", 500),
 
     sessionAuthEnabled: bool("FIGURA_SESSION_AUTH", true),
     hasJoinedUrl: str(

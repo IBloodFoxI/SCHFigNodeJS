@@ -3,6 +3,7 @@ import path from "node:path";
 import { WebSocketServer } from "ws";
 
 import { loadConfig } from "./config.js";
+import { LogBuffer } from "./logbuffer.js";
 import { createApiHandler, runSweep } from "./http/api.js";
 import { AssetCache } from "./stores/assets.js";
 import { AvatarStore } from "./stores/avatars.js";
@@ -10,12 +11,17 @@ import { UserStore } from "./stores/users.js";
 import { TokenVerifier } from "./tokens.js";
 import { WsHub } from "./ws/hub.js";
 
+/** Replaced with the configured size once config is read; sized 1 until then. */
+let logs: LogBuffer = new LogBuffer(1);
+
 function log(message: string): void {
-  process.stdout.write(`${new Date().toISOString()} ${message}\n`);
+  const line = logs.push(message);
+  process.stdout.write(`${line.time} ${message}\n`);
 }
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  logs = new LogBuffer(config.logBufferLines);
 
   const tokens = new TokenVerifier(config.secret);
   const avatars = new AvatarStore(path.join(config.dataDir, "avatars"));
@@ -28,7 +34,7 @@ async function main(): Promise<void> {
   await Promise.all([avatars.init(), users.init(), assets.init()]);
 
   const hub = new WsHub(tokens, config.debug, log);
-  const deps = { config, tokens, avatars, users, assets, hub, log };
+  const deps = { config, tokens, avatars, users, assets, hub, log, logs };
   const handle = createApiHandler(deps);
 
   // A process killed mid-rename leaves *.tmp behind; clear them before serving.
