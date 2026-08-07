@@ -182,26 +182,34 @@ export class WsHub {
   /**
    * Tells subscribers that a player's avatar changed, so they refetch it.
    *
-   * @param actor whoever caused the change — they are skipped on purpose. The client that
-   *   just uploaded already holds the avatar locally, and this event makes it call
-   *   AvatarManager.clearAvatars() on itself: the freshly uploaded avatar vanishes and
-   *   the player sees the upload "do nothing". Everyone else does need to hear about it.
+   * <p>The uploader is included on purpose, and it matters. The wardrobe's upload button
+   * calls {@code LocalAvatarLoader.loadAvatar(null, null)} — it drops the avatar it was
+   * showing from disk and waits for the cloud copy. This event is what starts that:
+   * the client runs reloadAvatar -> clearAvatars -> forgets it fetched that player ->
+   * the next frame asks for the profile and downloads the avatar back. Skip it and the
+   * player is left staring at nothing, which is what pressing the wardrobe's reload
+   * button works around by doing clearAvatars by hand.
    */
-  broadcastAvatarChanged(subject: string, actor?: string): void {
+  broadcastAvatarChanged(subject: string): void {
     const watchers = this.#subscribers.get(subject);
-    if (watchers === undefined || watchers.size === 0) return;
+    if (watchers === undefined || watchers.size === 0) {
+      if (this.#debug) this.#log(`[ws] avatar of ${subject} changed, nobody subscribed`);
+      return;
+    }
 
     const message = Buffer.allocUnsafe(17);
     message.writeUInt8(S2C.EVENT, 0);
     writeUuid(message, 1, subject);
 
-    let sent = 0;
+    let self = 0;
     for (const watcher of watchers) {
-      if (actor !== undefined && watcher.uuid === actor) continue;
       send(watcher, message);
-      sent += 1;
+      if (watcher.uuid === subject) self += 1;
     }
-    if (this.#debug) this.#log(`[ws] avatar of ${subject} changed, told ${sent} watcher(s)`);
+    if (this.#debug) {
+      this.#log(`[ws] avatar of ${subject} changed, told ${watchers.size} watcher(s)`
+        + (self > 0 ? " (including the owner)" : " — the owner is NOT among them"));
+    }
   }
 
   /** One toast per notice type per 5s, so a runaway script cannot spam the player. */

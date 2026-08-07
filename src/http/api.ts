@@ -132,7 +132,7 @@ export function createApiHandler(deps: ApiDeps) {
       const deleted = await avatars.delete(me.uuid, parts[0]!);
       if (!deleted) return text(res, 404, "avatar not found");
       await users.unequipAll(me.uuid, parts[0]!);
-      hub.broadcastAvatarChanged(me.uuid, me.uuid);
+      hub.broadcastAvatarChanged(me.uuid);
       return text(res, 200, "ok");
     }
 
@@ -297,7 +297,7 @@ async function upload(
 
   await avatars.save(me.uuid, id, body);
   recentUploads.set(me.uuid, Date.now());
-  hub.broadcastAvatarChanged(me.uuid, me.uuid);
+  hub.broadcastAvatarChanged(me.uuid);
   text(res, 200, "ok");
 }
 
@@ -357,7 +357,7 @@ async function equip(
   }
 
   await users.setEquipped(me.uuid, equipped);
-  hub.broadcastAvatarChanged(me.uuid, me.uuid);
+  hub.broadcastAvatarChanged(me.uuid);
   text(res, 200, "ok");
 }
 

@@ -1,8 +1,9 @@
-"""Проверяет, что игрок НЕ получает EVENT о своём же изменении аватара.
+"""Проверяет, что EVENT о смене аватара получают ВСЕ подписчики, включая владельца.
 
-Клиент, получив EVENT про самого себя, вызывает AvatarManager.clearAvatars() и
-стирает только что залитый аватар — со стороны это выглядит как «кнопка нажалась,
-и ничего не произошло». Остальные при этом обязаны узнать об изменении.
+Кнопка загрузки в гардеробе выгружает аватар с диска и ждёт облачную копию.
+Запускает её появление именно это событие: клиент делает clearAvatars, забывает,
+что уже качал этого игрока, и следующим кадром запрашивает профиль. Без события
+игрок остаётся ни с чем — ровно то, что обходится кнопкой релоада в гардеробе.
 """
 import base64, hashlib, hmac, json, os, socket, struct, sys, time, uuid as uuidlib
 import urllib.request, urllib.error
@@ -139,12 +140,13 @@ check("equip прошёл", code == 200, str(code))
 
 time.sleep(0.5)
 
-mine = me_ws.recv_binary(timeout=2)
-check("автору EVENT НЕ пришёл (иначе он сотрёт свой аватар)", mine is None,
+expected = bytes([2]) + ME.bytes
+
+mine = me_ws.recv_binary(timeout=3)
+check("владелец EVENT получил (иначе облачный аватар не появится)", mine == expected,
       repr(mine[:20]) if mine else "None")
 
 seen = viewer_ws.recv_binary(timeout=3)
-expected = bytes([2]) + ME.bytes
 check("зритель EVENT получил", seen == expected,
       repr(seen[:20]) if seen else "None")
 
