@@ -179,8 +179,15 @@ export class WsHub {
     }
   }
 
-  /** Tells subscribers that a player's avatar changed, so they refetch it. */
-  broadcastAvatarChanged(subject: string): void {
+  /**
+   * Tells subscribers that a player's avatar changed, so they refetch it.
+   *
+   * @param actor whoever caused the change — they are skipped on purpose. The client that
+   *   just uploaded already holds the avatar locally, and this event makes it call
+   *   AvatarManager.clearAvatars() on itself: the freshly uploaded avatar vanishes and
+   *   the player sees the upload "do nothing". Everyone else does need to hear about it.
+   */
+  broadcastAvatarChanged(subject: string, actor?: string): void {
     const watchers = this.#subscribers.get(subject);
     if (watchers === undefined || watchers.size === 0) return;
 
@@ -188,7 +195,13 @@ export class WsHub {
     message.writeUInt8(S2C.EVENT, 0);
     writeUuid(message, 1, subject);
 
-    for (const watcher of watchers) send(watcher, message);
+    let sent = 0;
+    for (const watcher of watchers) {
+      if (actor !== undefined && watcher.uuid === actor) continue;
+      send(watcher, message);
+      sent += 1;
+    }
+    if (this.#debug) this.#log(`[ws] avatar of ${subject} changed, told ${sent} watcher(s)`);
   }
 
   /** One toast per notice type per 5s, so a runaway script cannot spam the player. */
